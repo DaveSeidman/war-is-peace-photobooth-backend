@@ -1,0 +1,29 @@
+{
+  "name": "war-is-peace-photobooth-backend",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "nodemon index.js --watch index.js",
+    "serve": "node index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DaveSeidman/war-is-peace-photobooth-backend.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/DaveSeidman/war-is-peace-photobooth-backend/issues"
+  },
+  "homepage": "https://github.com/DaveSeidman/war-is-peace-photobooth-backend#readme",
+  "description": "",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "multer": "^2.0.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}

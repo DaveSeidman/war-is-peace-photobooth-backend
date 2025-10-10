@@ -4,3 +4,4 @@ dist
 etc
 uploads/
 !uploads/.gitkeep
+.env

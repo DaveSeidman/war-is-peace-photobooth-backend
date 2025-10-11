@@ -19,6 +19,7 @@
   "homepage": "https://github.com/DaveSeidman/war-is-peace-photobooth-backend#readme",
   "description": "",
   "dependencies": {
+    "@fal-ai/client": "^1.6.2",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",

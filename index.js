@@ -3,21 +3,28 @@ import cors from "cors";
 import multer from "multer";
 import fs from "fs";
 import path from "path";
-import OpenAI, { toFile } from "openai";
 import dotenv from "dotenv";
+import { fal } from "@fal-ai/client";
+import { File } from "node:buffer"; // ✅ Needed for Fal uploads in Node
 
 dotenv.config();
-// Ensure uploads directory exists
+
+// Configure Fal.ai client
+fal.config({
+  credentials: process.env.FAL_KEY,
+});
+
+// Ensure uploads dir exists
 const uploadDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 
 const app = express();
 const PORT = 8000;
 
-// Allow all origins for localhost testing
 app.use(cors());
+app.use(express.json());
 
-// Multer setup to handle file uploads
+// === Multer setup ===
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => {
@@ -26,19 +33,13 @@ const storage = multer.diskStorage({
     cb(null, `photo_${timestamp}${ext}`);
   },
 });
-
 const upload = multer({ storage });
 
-// Parse JSON (for non-file routes)
-app.use(express.json());
-
-// Upload endpoint
+// === Upload endpoint ===
 app.post("/upload", upload.single("photo"), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ success: false, message: "No file uploaded" });
-  }
+  if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
 
-  console.log(`Saved file: ${req.file.path}`);
+  console.log(`📸 Saved file: ${req.file.path}`);
 
   res.json({
     success: true,
@@ -47,72 +48,88 @@ app.post("/upload", upload.single("photo"), (req, res) => {
   });
 });
 
-// Static serve uploaded files
+// Serve uploaded files
 app.use("/uploads", express.static(uploadDir));
 
 app.get("/test/:type", async (req, res) => {
-
   try {
-    const client = new OpenAI({ apiKey: process.env.OPENAI_KEY });
-
-    const inputPath = path.join(uploadDir, "test.jpg"); // change to .png/.webp if needed
-    const outputPath = path.join(uploadDir, "test_edited.jpg");
-
+    const inputPath = path.join(uploadDir, "test.jpg");
     if (!fs.existsSync(inputPath)) {
       return res.status(404).json({ error: "uploads/test.jpg not found" });
     }
 
-    // Pick the right MIME based on extension
-    const ext = path.extname(inputPath).toLowerCase();
-    const mime =
-      ext === ".jpg" || ext === ".jpeg"
-        ? "image/jpeg"
-        : ext === ".png"
-          ? "image/png"
-          : ext === ".webp"
-            ? "image/webp"
-            : null;
+    const buffer = fs.readFileSync(inputPath);
+    const file = new File([buffer], path.basename(inputPath), { type: "image/jpeg" });
+    const uploaded = await fal.storage.upload(file);
+    console.log("Fal upload response:", uploaded);
 
-    if (!mime) {
-      return res.status(400).json({ error: "Unsupported image type. Use JPG/PNG/WebP." });
+    // Fallback logic to extract URL
+    let imageUrl;
+    if (typeof uploaded === "string") {
+      imageUrl = uploaded;
+    } else if (uploaded.file && typeof uploaded.file.url === "string") {
+      imageUrl = uploaded.file.url;
+    } else {
+      throw new Error("Fal upload failed: no usable URL returned");
     }
 
-    // IMPORTANT: wrap the stream so the SDK sends a proper multipart with Content-Type
-    const imageFile = await toFile(fs.createReadStream(inputPath), path.basename(inputPath), {
-      type: mime,
+    console.log("✅ Uploaded image URL:", imageUrl);
+
+    const prompts = {
+      past: "1955 portrait in Hill Valley diner style, warm pastel tones, film grain, vintage clothes, Kodak photo look",
+      future: "Retro-futuristic 2015 Hill Valley, neon glow, chrome hoverboards, holograms, glossy sci-fi photo aesthetic",
+      remove: "Remove a random person from this photo and fill the background naturally",
+      banana: "put a banana over each person's face"
+    };
+
+    const prompt = `make an image of a ${prompts[req.params.type]}`;
+    if (!prompt) return res.status(400).json({ error: "Invalid type parameter" });
+
+    console.log("🚀 Sending to nano-banana edit...");
+    const result = await fal.subscribe("fal-ai/nano-banana/edit", {
+      input: {
+        prompt: prompt,
+        image_urls: [imageUrl],
+      },
+      logs: true,
+      onQueueUpdate: (update) => {
+        if (update.status === "IN_PROGRESS") {
+          update.logs.map((l) => l.message).forEach(console.log);
+        }
+      },
     });
 
-    const removePersonPrompt = "Remove a random person from this photo and fill the background naturally"
-    const backwardPrompt = "1955 portrait in Hill Valley diner style, warm pastel tones, film grain, vintage clothes, Kodak photo look"
-    const futurePrompt = "Retro-futuristic 2015 Hill Valley, neon glow, chrome hoverboards, holograms, glossy sci-fi photo aesthetic"
-
-    const prompts = { past: backwardPrompt, future: futurePrompt, remove: removePersonPrompt }
-    console.log("🧠 Sending image to GPT for editing...");
-    const response = await client.images.edit({
-      model: "gpt-image-1",
-      image: [imageFile], // can be a single File or an array
-      prompt: prompts[req.params.type],
-      size: "1024x1024",
-    });
-
-    const editedBase64 = response.data[0].b64_json;
-    fs.writeFileSync(outputPath, Buffer.from(editedBase64, "base64"));
-
-    console.log("✅ Saved edited image:", outputPath);
+    console.log("Result data:", result.data);
+    const outUrls = result.data?.images;
+    const outputUrl = Array.isArray(outUrls) && outUrls.length > 0 ? outUrls[0] : null;
+    if (!outputUrl) {
+      throw new Error("nano-banana returned no images");
+    }
 
     res.json({
       success: true,
-      output: `/uploads/${path.basename(outputPath)}`,
+      input: `/uploads/${path.basename(inputPath)}`,
+      output: outputUrl,
     });
   } catch (err) {
-    console.error("❌ Error editing image:", err);
+    console.error("❌ Error in nano-banana route:", err);
     res.status(500).json({ error: err.message });
   }
 });
-
 // Root
 app.get("/", (req, res) => {
-  res.send("photo server");
+  res.send("photo server (Fal.ai version)");
+});
+
+app.post('/edit/:type', upload.single("photo"), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ success: false, message: "No file uploaded" });
+  }
+
+  console.log(`📸 Saved file for type "${req.params.type}": ${req.file.path}`);
+
+  // Return a simple response
+  res.json({ status: "ok", filename: req.file.filename });
 });
 
 app.listen(PORT, () => {

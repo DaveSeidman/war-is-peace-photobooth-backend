@@ -50,7 +50,8 @@ app.post("/upload", upload.single("photo"), (req, res) => {
 // Static serve uploaded files
 app.use("/uploads", express.static(uploadDir));
 
-app.get("/test", async (req, res) => {
+app.get("/test/:type", async (req, res) => {
+
   try {
     const client = new OpenAI({ apiKey: process.env.OPENAI_KEY });
 
@@ -81,11 +82,16 @@ app.get("/test", async (req, res) => {
       type: mime,
     });
 
+    const removePersonPrompt = "Remove a random person from this photo and fill the background naturally"
+    const backwardPrompt = "1955 portrait in Hill Valley diner style, warm pastel tones, film grain, vintage clothes, Kodak photo look"
+    const futurePrompt = "Retro-futuristic 2015 Hill Valley, neon glow, chrome hoverboards, holograms, glossy sci-fi photo aesthetic"
+
+    const prompts = { past: backwardPrompt, future: futurePrompt, remove: removePersonPrompt }
     console.log("🧠 Sending image to GPT for editing...");
     const response = await client.images.edit({
       model: "gpt-image-1",
       image: [imageFile], // can be a single File or an array
-      prompt: "Remove one random person from this photo and fill the background naturally.",
+      prompt: prompts[req.params.type],
       size: "1024x1024",
     });
 

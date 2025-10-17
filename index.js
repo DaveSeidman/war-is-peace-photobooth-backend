@@ -8,6 +8,7 @@ import { fal } from "@fal-ai/client";
 import { File } from "node:buffer";
 import fetch from "node-fetch";
 import { createCanvas, loadImage } from "canvas";
+import sharp from "sharp";
 
 dotenv.config();
 
@@ -50,9 +51,16 @@ app.post("/submit", upload.single("photo"), async (req, res) => {
     const originalPath = req.file.path;
     console.log(`📸 Received file: ${originalPath}`);
 
-    // Upload original to Fal storage
-    const buffer = fs.readFileSync(originalPath);
-    const file = new File([buffer], req.file.filename, { type: "image/jpeg" });
+    const originalBuffer = fs.readFileSync(originalPath);
+
+    // Resize to 1024px width max using sharp
+    const resizedBuffer = await sharp(originalBuffer)
+      .resize({ width: 1024, withoutEnlargement: true })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+
+    // Use resized buffer for Fal upload instead of full-res image
+    const file = new File([resizedBuffer], req.file.filename, { type: "image/jpeg" });
     const uploaded = await fal.storage.upload(file);
 
     const imageUrl =
@@ -60,8 +68,7 @@ app.post("/submit", upload.single("photo"), async (req, res) => {
         ? uploaded
         : uploaded.file?.url || (() => { throw new Error("Fal upload failed"); })();
 
-    console.log("✅ Uploaded to Fal:", imageUrl);
-
+    console.log(`✅ Uploaded resized image to Fal: ${imageUrl}`);
     const prompts = {
       past: "1955 portrait in Hill Valley diner style, warm pastel tones, film grain, vintage clothes, Kodak photo look",
       future:

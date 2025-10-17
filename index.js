@@ -41,7 +41,7 @@ const upload = multer({ storage });
 // === Serve folders statically ===
 app.use("/uploads", express.static(uploadDir));
 app.use("/photos", express.static(photoDir));
-
+app.get('/', (req, res) => { res.json({ status: 'ok' }) })
 app.post("/submit", upload.single("photo"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });

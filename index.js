@@ -6,6 +6,8 @@ import path from "path";
 import dotenv from "dotenv";
 import { fal } from "@fal-ai/client";
 import { File } from "node:buffer";
+import fetch from "node-fetch";
+import { createCanvas, loadImage } from "canvas";
 
 dotenv.config();
 
@@ -19,9 +21,11 @@ const PORT = 8000;
 app.use(cors());
 app.use(express.json());
 
-// === Setup uploads folder ===
+// === Setup folders ===
 const uploadDir = path.join(process.cwd(), "uploads");
+const photoDir = path.join(process.cwd(), "photos");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+if (!fs.existsSync(photoDir)) fs.mkdirSync(photoDir);
 
 // === Multer setup ===
 const storage = multer.diskStorage({
@@ -29,82 +33,25 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => {
     const timestamp = Date.now();
     const ext = path.extname(file.originalname) || ".jpg";
-    cb(null, `photo_${req.params.type || "generic"}_${timestamp}${ext}`);
+    cb(null, `photo_${timestamp}${ext}`);
   },
 });
 const upload = multer({ storage });
 
-// === Serve uploads statically ===
+// === Serve folders statically ===
 app.use("/uploads", express.static(uploadDir));
+app.use("/photos", express.static(photoDir));
 
-/**
- * 🧪 TEST ROUTE (kept as-is)
- */
-app.get("/test/:type", async (req, res) => {
+app.post("/submit", upload.single("photo"), async (req, res) => {
   try {
-    const inputPath = path.join(uploadDir, "test.jpg");
-    if (!fs.existsSync(inputPath)) {
-      return res.status(404).json({ error: "uploads/test.jpg not found" });
-    }
+    if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
 
-    const buffer = fs.readFileSync(inputPath);
-    const file = new File([buffer], path.basename(inputPath), { type: "image/jpeg" });
-    const uploaded = await fal.storage.upload(file);
+    const timestamp = Date.now();
+    const originalPath = req.file.path;
+    console.log(`📸 Received file: ${originalPath}`);
 
-    const imageUrl =
-      typeof uploaded === "string"
-        ? uploaded
-        : uploaded.file?.url || (() => { throw new Error("Fal upload failed"); })();
-
-    const prompts = {
-      past: "1955 portrait in Hill Valley diner style, warm pastel tones, film grain, vintage clothes, Kodak photo look",
-      future: "Retro-futuristic 2015 Hill Valley, neon glow, chrome hoverboards, holograms, glossy sci-fi photo aesthetic",
-      remove: "Remove a random person from this photo and fill the background naturally",
-      banana: "put a banana over each person's face",
-    };
-
-    const prompt = `make an image of a ${prompts[req.params.type]}`;
-    if (!prompt) return res.status(400).json({ error: "Invalid type parameter" });
-
-    console.log("🚀 Sending to nano-banana edit...");
-    const result = await fal.subscribe("fal-ai/nano-banana/edit", {
-      input: { prompt, image_urls: [imageUrl] },
-      logs: true,
-      onQueueUpdate: (update) => {
-        if (update.status === "IN_PROGRESS") {
-          update.logs.map((l) => l.message).forEach(console.log);
-        }
-      },
-    });
-
-    const outUrls = result.data?.images;
-    const outputUrl = Array.isArray(outUrls) && outUrls.length > 0 ? outUrls[0] : null;
-    if (!outputUrl) throw new Error("nano-banana returned no images");
-
-    res.json({
-      success: true,
-      input: `/uploads/${path.basename(inputPath)}`,
-      output: outputUrl,
-    });
-  } catch (err) {
-    console.error("❌ Error in nano-banana test route:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * 🎨 EDIT ROUTE — does everything dynamically
- */
-app.post("/edit/:type", upload.single("photo"), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: "No file uploaded" });
-    }
-
-    console.log(`📸 Received file for "${req.params.type}": ${req.file.path}`);
-
-    // Upload to Fal storage
-    const buffer = fs.readFileSync(req.file.path);
+    // Upload original to Fal storage
+    const buffer = fs.readFileSync(originalPath);
     const file = new File([buffer], req.file.filename, { type: "image/jpeg" });
     const uploaded = await fal.storage.upload(file);
 
@@ -117,41 +64,104 @@ app.post("/edit/:type", upload.single("photo"), async (req, res) => {
 
     const prompts = {
       past: "1955 portrait in Hill Valley diner style, warm pastel tones, film grain, vintage clothes, Kodak photo look",
-      future: "Retro-futuristic 2015 Hill Valley, neon glow, chrome hoverboards, holograms, glossy sci-fi photo aesthetic",
-      banana: "put a banana over each person's face",
+      future:
+        "keep all the people the same, but make it look like the photo was taken in the future. Cyber styling, futuristic, humans look like androids, skin is metallic, chrome, embedded LEDs",
     };
 
-    const prompt = `make an image of a ${prompts[req.params.type]}`;
-    if (!prompt) return res.status(400).json({ error: "Invalid type parameter" });
+    console.log("🚀 Sending both Fal edits (past + future)...");
 
-    console.log("🚀 Sending to nano-banana edit...");
-    const result = await fal.subscribe("fal-ai/nano-banana/edit", {
-      input: { prompt, image_urls: [imageUrl] },
-      logs: true,
-      onQueueUpdate: (update) => {
-        if (update.status === "IN_PROGRESS") {
-          update.logs.map((l) => l.message).forEach(console.log);
-        }
-      },
-    });
+    // Run both Fal generations in parallel
+    const [pastResult, futureResult] = await Promise.all([
+      fal.subscribe("fal-ai/nano-banana/edit", {
+        input: { prompt: prompts.past, image_urls: [imageUrl] },
+        logs: true,
+        onQueueUpdate: (update) => {
+          if (update.status === "IN_PROGRESS")
+            update.logs.map((l) => l.message).forEach((m) => console.log("[past]", m));
+        },
+      }),
+      fal.subscribe("fal-ai/nano-banana/edit", {
+        input: { prompt: prompts.future, image_urls: [imageUrl] },
+        logs: true,
+        onQueueUpdate: (update) => {
+          if (update.status === "IN_PROGRESS")
+            update.logs.map((l) => l.message).forEach((m) => console.log("[future]", m));
+        },
+      }),
+    ]);
 
-    const outUrls = result.data?.images;
-    const outputUrl = Array.isArray(outUrls) && outUrls.length > 0 ? outUrls[0] : null;
-    if (!outputUrl) throw new Error("nano-banana returned no images");
+    // ✅ Extract proper URLs from Fal responses
+    const extractUrl = (r) => {
+      const imgs = r.data?.images;
+      if (!Array.isArray(imgs) || imgs.length === 0) return null;
 
-    console.log("✅ nano-banana complete:", outputUrl);
+      const first = imgs[0];
+      if (typeof first === "string") return first;
+      if (first?.url) return first.url;
+      return null;
+    };
+
+    const pastUrl = extractUrl(pastResult);
+    const futureUrl = extractUrl(futureResult);
+
+    if (!pastUrl || !futureUrl) {
+      console.error("❌ Fal result missing URLs:", { pastUrl, futureUrl });
+      throw new Error("One or both Fal edits failed to return valid URLs");
+    }
+
+    console.log("✅ Fal edits complete:");
+    console.log("  Past  →", pastUrl);
+    console.log("  Future →", futureUrl);
+
+    // === Compose the three images ===
+    console.log("🖼️ Compositing images...");
+
+    const loadRemoteImage = async (url) => {
+      if (!/^https?:\/\//.test(url)) throw new Error(`Invalid image URL: ${url}`);
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`Failed to fetch image: ${url}`);
+      const arrayBuffer = await resp.arrayBuffer();
+      return await loadImage(Buffer.from(arrayBuffer));
+    };
+
+    console.log("Loading original...");
+    const imgOriginal = await loadImage(originalPath);
+    console.log("Loading past...");
+    const imgPast = await loadRemoteImage(pastUrl);
+    console.log("Loading future...");
+    const imgFuture = await loadRemoteImage(futureUrl);
+
+    const width = Math.max(imgOriginal.width, imgPast.width, imgFuture.width);
+    const height = Math.max(imgOriginal.height, imgPast.height, imgFuture.height);
+    const canvas = createCanvas(width, height * 3);
+    const ctx = canvas.getContext("2d");
+
+    ctx.drawImage(imgPast, 0, 0, width, height);
+    ctx.drawImage(imgOriginal, 0, height * 1, width, height);
+    ctx.drawImage(imgFuture, 0, height * 2, width, height);
+
+    const combinedPath = path.join(photoDir, `${timestamp}.jpg`);
+    const out = fs.createWriteStream(combinedPath);
+    const stream = canvas.createJPEGStream({ quality: 0.9 });
+    stream.pipe(out);
+    await new Promise((resolve) => out.on("finish", resolve));
+
+    console.log("✅ Saved composite image:", combinedPath);
 
     res.json({
       success: true,
       input: `/uploads/${req.file.filename}`,
-      output: outputUrl,
+      output: {
+        past: pastUrl,
+        future: futureUrl,
+        link: `/photos/${timestamp}.jpg`,
+      },
     });
   } catch (err) {
-    console.error("❌ Error in /edit route:", err);
+    console.error("❌ Error in /submit route:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get("/", (req, res) => res.send("photo server (Fal nano-banana mode)"));
 
 app.listen(PORT, () => console.log(`✅ Server running at http://localhost:${PORT}`));

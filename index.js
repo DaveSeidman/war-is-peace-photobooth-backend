@@ -154,7 +154,7 @@ app.post("/submit", upload.single("photo"), async (req, res) => {
       output: {
         past: pastUrl,
         future: futureUrl,
-        link: `/photos/${timestamp}.jpg`,
+        photoId: timestamp,
       },
     });
   } catch (err) {

@@ -55,7 +55,7 @@ app.post("/submit", upload.single("photo"), async (req, res) => {
 
     // Resize to 1024px width max using sharp
     const resizedBuffer = await sharp(originalBuffer)
-      .resize({ width: 1024, withoutEnlargement: true })
+      .resize({ width: 512, withoutEnlargement: true })
       .jpeg({ quality: 85 })
       .toBuffer();
 

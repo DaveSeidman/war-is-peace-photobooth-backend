@@ -153,105 +153,105 @@ app.post("/submit", upload.single("photo"), async (req, res) => {
     });
 
     // === background async task ===
-    ; (async () => {
-      try {
-        console.log("🎬 Starting background nano-banana removals...");
+    // ; (async () => {
+    //   try {
+    //     console.log("🎬 Starting background nano-banana removals...");
 
-        const compBuffer = fs.readFileSync(combinedPath);
-        const compFile = new File([compBuffer], `${timestamp}.jpg`, { type: "image/jpeg" });
-        const compUpload = await fal.storage.upload(compFile);
-        let currentUrl =
-          typeof compUpload === "string"
-            ? compUpload
-            : compUpload.file?.url || (() => { throw new Error("Composite upload failed"); })();
+    //     const compBuffer = fs.readFileSync(combinedPath);
+    //     const compFile = new File([compBuffer], `${timestamp}.jpg`, { type: "image/jpeg" });
+    //     const compUpload = await fal.storage.upload(compFile);
+    //     let currentUrl =
+    //       typeof compUpload === "string"
+    //         ? compUpload
+    //         : compUpload.file?.url || (() => { throw new Error("Composite upload failed"); })();
 
-        const fetchToBuffer = async (url) => {
-          const resp = await fetch(url);
-          if (!resp.ok) throw new Error(`Failed to fetch image: ${url}`);
-          return Buffer.from(await resp.arrayBuffer());
-        };
+    //     const fetchToBuffer = async (url) => {
+    //       const resp = await fetch(url);
+    //       if (!resp.ok) throw new Error(`Failed to fetch image: ${url}`);
+    //       return Buffer.from(await resp.arrayBuffer());
+    //     };
 
-        const uploadBufferToFal = async (buf, name) => {
-          const f = new File([buf], name, { type: "image/jpeg" });
-          const up = await fal.storage.upload(f);
-          return typeof up === "string" ? up : up.file?.url || null;
-        };
+    //     const uploadBufferToFal = async (buf, name) => {
+    //       const f = new File([buf], name, { type: "image/jpeg" });
+    //       const up = await fal.storage.upload(f);
+    //       return typeof up === "string" ? up : up.file?.url || null;
+    //     };
 
-        const extractUrl = (r) => {
-          const imgs = r.data?.images;
-          if (!Array.isArray(imgs) || imgs.length === 0) return null;
-          const first = imgs[0];
-          return typeof first === "string" ? first : first?.url || null;
-        };
+    //     const extractUrl = (r) => {
+    //       const imgs = r.data?.images;
+    //       if (!Array.isArray(imgs) || imgs.length === 0) return null;
+    //       const first = imgs[0];
+    //       return typeof first === "string" ? first : first?.url || null;
+    //     };
 
-        const framePaths = [combinedPath];
-        for (let i = 1; i <= 3; i++) {
-          console.log(`🧩 Running removal ${i}/3 using ${currentUrl} ...`);
-          const result = await fal.subscribe("fal-ai/nano-banana/edit", {
-            input: { prompt: removePrompt, image_urls: [currentUrl] },
-            logs: true,
-          });
-          const outUrl = extractUrl(result);
-          if (!outUrl) throw new Error(`Fal removal #${i} returned no image`);
+    //     const framePaths = [combinedPath];
+    //     for (let i = 1; i <= 3; i++) {
+    //       console.log(`🧩 Running removal ${i}/3 using ${currentUrl} ...`);
+    //       const result = await fal.subscribe("fal-ai/nano-banana/edit", {
+    //         input: { prompt: removePrompt, image_urls: [currentUrl] },
+    //         logs: true,
+    //       });
+    //       const outUrl = extractUrl(result);
+    //       if (!outUrl) throw new Error(`Fal removal #${i} returned no image`);
 
-          const buf = await fetchToBuffer(outUrl);
-          const framePath = path.join(photoDir, `${timestamp}_remove${i}.jpg`);
-          fs.writeFileSync(framePath, buf);
-          framePaths.push(framePath);
-          console.log(`✅ Saved removal #${i}:`, framePath);
+    //       const buf = await fetchToBuffer(outUrl);
+    //       const framePath = path.join(photoDir, `${timestamp}_remove${i}.jpg`);
+    //       fs.writeFileSync(framePath, buf);
+    //       framePaths.push(framePath);
+    //       console.log(`✅ Saved removal #${i}:`, framePath);
 
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-          const nextUrl = await uploadBufferToFal(buf, `${timestamp}_remove${i}.jpg`);
-          if (!nextUrl) throw new Error(`Upload of removal #${i} failed`);
-          currentUrl = nextUrl;
-        }
+    //       await new Promise((resolve) => setTimeout(resolve, 1500));
+    //       const nextUrl = await uploadBufferToFal(buf, `${timestamp}_remove${i}.jpg`);
+    //       if (!nextUrl) throw new Error(`Upload of removal #${i} failed`);
+    //       currentUrl = nextUrl;
+    //     }
 
-        console.log("🎉 Removal pipeline complete.");
-        console.log("✅ All frames:", framePaths);
+    //     console.log("🎉 Removal pipeline complete.");
+    //     console.log("✅ All frames:", framePaths);
 
-        console.log("🎞️ Creating animated GIF with fades...");
-        const normalizedPaths = [];
+    //     console.log("🎞️ Creating animated GIF with fades...");
+    //     const normalizedPaths = [];
 
-        // normalize all images to same width/height
-        const { width, height } = await sharp(framePaths[0]).metadata();
-        for (let i = 0; i < framePaths.length; i++) {
-          const outPath = framePaths[i].replace(".jpg", "_norm.jpg");
-          await sharp(framePaths[i])
-            .resize({ width, height, fit: "cover" })
-            .toFile(outPath);
-          normalizedPaths.push(outPath);
-        }
+    //     // normalize all images to same width/height
+    //     const { width, height } = await sharp(framePaths[0]).metadata();
+    //     for (let i = 0; i < framePaths.length; i++) {
+    //       const outPath = framePaths[i].replace(".jpg", "_norm.jpg");
+    //       await sharp(framePaths[i])
+    //         .resize({ width, height, fit: "cover" })
+    //         .toFile(outPath);
+    //       normalizedPaths.push(outPath);
+    //     }
 
-        const gifPath = path.join(photoDir, `${timestamp}.gif`);
+    //     const gifPath = path.join(photoDir, `${timestamp}.gif`);
 
-        // Each still lasts 2 s, fades are 1 s
-        // Use xfade transitions chained together
-        // build input list
-        const inputs = normalizedPaths.map(p => `-loop 1 -t 2 -i "${p}"`).join(" ");
+    //     // Each still lasts 2 s, fades are 1 s
+    //     // Use xfade transitions chained together
+    //     // build input list
+    //     const inputs = normalizedPaths.map(p => `-loop 1 -t 2 -i "${p}"`).join(" ");
 
-        // Build chained xfade filters
-        // e.g. [0][1]xfade=transition=fade:duration=1:offset=1[v1];[v1][2]xfade=...
-        let filter = "";
-        let lastLabel = `[0:v]`;
-        for (let i = 1; i < normalizedPaths.length; i++) {
-          const inLabelA = i === 1 ? `[0:v]` : `[v${i - 1}]`;
-          const inLabelB = `[${i}:v]`;
-          const outLabel = i === normalizedPaths.length - 1 ? "" : `[v${i}]`;
-          const offset = i * 2 - 1; // start fade at end of prior still
-          filter += `${inLabelA}${inLabelB}xfade=transition=fade:duration=1:offset=${offset}${outLabel ? outLabel + ";" : ""}`;
-        }
+    //     // Build chained xfade filters
+    //     // e.g. [0][1]xfade=transition=fade:duration=1:offset=1[v1];[v1][2]xfade=...
+    //     let filter = "";
+    //     let lastLabel = `[0:v]`;
+    //     for (let i = 1; i < normalizedPaths.length; i++) {
+    //       const inLabelA = i === 1 ? `[0:v]` : `[v${i - 1}]`;
+    //       const inLabelB = `[${i}:v]`;
+    //       const outLabel = i === normalizedPaths.length - 1 ? "" : `[v${i}]`;
+    //       const offset = i * 2 - 1; // start fade at end of prior still
+    //       filter += `${inLabelA}${inLabelB}xfade=transition=fade:duration=1:offset=${offset}${outLabel ? outLabel + ";" : ""}`;
+    //     }
 
-        const totalDuration = normalizedPaths.length * 2;
-        const cmd = `${ffmpegPath.path} -y ${inputs} -filter_complex "${filter},format=yuv420p,scale=512:-1:flags=lanczos,fps=15" -t ${totalDuration} "${gifPath}"`;
+    //     const totalDuration = normalizedPaths.length * 2;
+    //     const cmd = `${ffmpegPath.path} -y ${inputs} -filter_complex "${filter},format=yuv420p,scale=512:-1:flags=lanczos,fps=15" -t ${totalDuration} "${gifPath}"`;
 
-        console.log("▶️ Running:", cmd);
-        await execAsync(cmd);
-        console.log("✅ GIF with fades created:", gifPath);
+    //     console.log("▶️ Running:", cmd);
+    //     await execAsync(cmd);
+    //     console.log("✅ GIF with fades created:", gifPath);
 
-      } catch (err) {
-        console.error("❌ Background GIF generation failed:", err);
-      }
-    })();
+    //   } catch (err) {
+    //     console.error("❌ Background GIF generation failed:", err);
+    //   }
+    // })();
   } catch (err) {
     console.error("❌ Error in /submit route:", err);
     res.status(500).json({ error: err.message });

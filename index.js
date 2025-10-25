@@ -12,6 +12,8 @@ import sharp from "sharp";
 import ffmpegPath from "@ffmpeg-installer/ffmpeg";
 import { exec } from "child_process";
 import util from "util";
+import axios from "axios";
+import FormData from "form-data";
 
 const execAsync = util.promisify(exec);
 
@@ -151,6 +153,47 @@ app.post("/submit", upload.single("photo"), async (req, res) => {
       input: `/uploads/${req.file.filename}`,
       output: { past: pastUrl, future: futureUrl, photoId: timestamp },
     });
+
+    try {
+      console.log("🖨️ Sending composite to print server...");
+      const finalPath = path.join(photoDir, `${timestamp}_final.jpg`);
+
+      console.log("🧩 Creating double strip at 1200x1800 (300 DPI)...");
+
+      const strip = await sharp(combinedPath)
+        .resize({ width: 600, height: 1800, fit: "cover" })
+        .toBuffer();
+
+      const doubled = await sharp({
+        create: {
+          width: 1200,
+          height: 1800,
+          channels: 3,
+          background: { r: 255, g: 255, b: 255 }, // white background (optional)
+        },
+      })
+        .composite([
+          { input: strip, left: 0, top: 0 },
+          { input: strip, left: 600, top: 0 },
+        ])
+        .withMetadata({ density: 300 }) // sets 300 DPI
+        .jpeg({ quality: 95 })
+        .toFile(finalPath);
+
+      console.log("✅ Double strip ready:", finalPath);
+      const form = new FormData();
+      form.append("file", fs.createReadStream(finalPath));
+
+      const response = await axios.post(
+        "https://war-is-peace-print.ngrok.app/print",
+        form,
+        { headers: form.getHeaders() }
+      );
+
+      console.log("✅ Print server response:", response.data);
+    } catch (err) {
+      console.error("❌ Failed to send composite to print server:", err.message);
+    }
 
     // === background async task ===
     // ; (async () => {

@@ -157,27 +157,34 @@ app.post("/submit", upload.single("photo"), async (req, res) => {
     try {
       console.log("🖨️ Sending composite to print server...");
       const finalPath = path.join(photoDir, `${timestamp}_final.jpg`);
+      console.log("🧩 Creating 4x6 double strip @300 DPI…");
 
-      console.log("🧩 Creating double strip at 1200x1800 (300 DPI)...");
-
-      const strip = await sharp(combinedPath)
+      const singleStrip = await sharp(combinedPath)
         .resize({ width: 600, height: 1800, fit: "cover" })
+        .removeAlpha()                   // ensure RGB only
+        .jpeg({ quality: 95, progressive: false }) // baseline JPEG
         .toBuffer();
 
-      const doubled = await sharp({
+      await sharp({
         create: {
           width: 1200,
           height: 1800,
           channels: 3,
-          background: { r: 255, g: 255, b: 255 }, // white background (optional)
+          background: { r: 255, g: 255, b: 255 },
         },
       })
         .composite([
-          { input: strip, left: 0, top: 0 },
-          { input: strip, left: 600, top: 0 },
+          { input: singleStrip, left: 0, top: 0 },
+          { input: singleStrip, left: 600, top: 0 },
         ])
-        .withMetadata({ density: 300 }) // sets 300 DPI
-        .jpeg({ quality: 95 })
+        .withMetadata({
+          density: 300,                  // embed correct DPI
+        })
+        .jpeg({
+          quality: 95,
+          progressive: false,            // disable progressive encoding
+          chromaSubsampling: "4:4:4",    // full-resolution color
+        })
         .toFile(finalPath);
 
       console.log("✅ Double strip ready:", finalPath);

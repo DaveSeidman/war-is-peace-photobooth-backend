@@ -4,7 +4,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "nodemon index.js --watch index.js",
+    "start": "nodemon --watch index.js --watch utils --ext js,json index.js",
     "serve": "node index.js"
   },
   "repository": {

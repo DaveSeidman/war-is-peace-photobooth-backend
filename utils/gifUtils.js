@@ -82,32 +82,40 @@ export async function runRemovalPipeline(photoDir, combinedPath, timestamp, remo
         normalizedPaths.push(outPath);
       }
 
-      // === FFmpeg GIF generation with PROPER chained xfade ===
-      console.log("🎞️ Creating animated GIF with chained fades...");
+      // === FFmpeg GIF generation using BLEND fallback ===
+      console.log("🎞️ Creating animated GIF using blend transitions...");
 
       const gifPath = path.join(photoDir, `${timestamp}.gif`);
 
-      // Build inputs: each still plays 2s, we’ll xfade 1s between them
-      const inputs = normalizedPaths.map((p) => `-loop 1 -t 2 -i "${p}"`).join(" ");
+      // Each still for 2s, 1s blend between them
+      const stillDuration = 2;
+      const fadeDuration = 1;
+      const totalDuration =
+        normalizedPaths.length * stillDuration - (normalizedPaths.length - 1) * fadeDuration;
 
-      // Chained xfade segments: [0][1] -> [v1]; [v1][2] -> [v2]; ...
+      const inputs = normalizedPaths.map((p) => `-loop 1 -t ${stillDuration} -i "${p}"`).join(" ");
+
+      // Build a basic blend chain
       const parts = [];
       for (let i = 1; i < normalizedPaths.length; i++) {
-        const inA = i === 1 ? `[0:v]` : `[v${i - 1}]`;
+        const inA = i === 1 ? "[0:v]" : `[v${i - 1}]`;
         const inB = `[${i}:v]`;
         const out = `[v${i}]`;
-        const offset = i * 2 - 1; // fade starts 1s before next still
-        parts.push(`${inA}${inB}xfade=transition=fade:duration=1:offset=${offset}${i < normalizedPaths.length - 1 ? out + ";" : out}`);
+
+        // Blend via simple all_expr (linear crossfade)
+        const expr = `all_expr='A*(1-T/${fadeDuration})+B*(T/${fadeDuration})'`;
+        const offset = (i - 1) * (stillDuration - fadeDuration);
+
+        parts.push(
+          `${inA}${inB}blend=${expr}:shortest=1:repeatlast=0,framestep=2${i < normalizedPaths.length - 1 ? out + ";" : out}`
+        );
       }
 
       const lastLabel = `[v${normalizedPaths.length - 1}]`;
 
-      // 🔑 The critical fix: feed last label into format/scale/fps, then map vout
       const filter =
         parts.join("") +
         `;${lastLabel}format=yuv420p,scale=512:-1:flags=lanczos,fps=15[vout]`;
-
-      const totalDuration = normalizedPaths.length * 2; // 2s per still
 
       const cmd = `${ffmpegPath.path} -y ${inputs} -filter_complex "${filter}" -map "[vout]" -t ${totalDuration} "${gifPath}"`;
 
@@ -115,13 +123,16 @@ export async function runRemovalPipeline(photoDir, combinedPath, timestamp, remo
       console.log(cmd);
 
       await execAsync(cmd);
-      console.log("✅ GIF with chained fades created:", gifPath);
+      console.log("✅ GIF with compatible blend fades created:", gifPath);
     } catch (err) {
       console.error("❌ Background GIF generation failed:", err);
+      if (err.stderr) console.error(err.stderr);
     } finally {
       // Cleanup normalized temps even on failure
       for (const n of normalizedPaths) {
-        try { fs.unlinkSync(n); } catch { }
+        try {
+          fs.unlinkSync(n);
+        } catch { }
       }
     }
   })();

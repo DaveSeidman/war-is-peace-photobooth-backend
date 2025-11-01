@@ -20,7 +20,7 @@ export async function runRemovalPipeline(photoDir, combinedPath, timestamp, remo
   try {
     console.log("🎬 Starting single-pass background removal…");
 
-    // === Downscale before upload for faster FAL ===
+    // Downscale before upload for faster FAL
     const smallBuffer = await sharp(combinedPath)
       .resize({ width: 512, withoutEnlargement: true })
       .jpeg({ quality: 80 })
@@ -45,7 +45,7 @@ export async function runRemovalPipeline(photoDir, combinedPath, timestamp, remo
       return Buffer.from(await resp.arrayBuffer());
     };
 
-    // === Run one fast FAL removal pass ===
+    // One fast FAL removal pass
     console.log("🧩 Running single removal with FAL…");
     const result = await fal.subscribe("fal-ai/nano-banana/edit", {
       input: { prompt: removePrompt, image_urls: [currentUrl] },
@@ -61,7 +61,7 @@ export async function runRemovalPipeline(photoDir, combinedPath, timestamp, remo
     framePaths.push(framePath);
     console.log(`✅ Saved removal image: ${framePath}`);
 
-    // === Normalize all images to same WxH ===
+    // Normalize both images to same WxH
     console.log("🧮 Normalizing images…");
     const { width, height } = await sharp(framePaths[0]).metadata();
     for (const p of framePaths) {
@@ -70,30 +70,20 @@ export async function runRemovalPipeline(photoDir, combinedPath, timestamp, remo
       normalizedPaths.push(out);
     }
 
-    // === Build GIF (square pixels + palette; FFmpeg 4.4+ safe) ===
-    console.log("🎞️ Creating animated GIF with 2 s hold → 2 s fade → 2 s hold…");
-
+    // Build GIF (2s hold → 2s fade → 2s hold) with square pixels + palette
+    console.log("🎞️ Creating animated GIF…");
     const gifPath = path.join(photoDir, `${timestamp}.gif`);
-    const holdFirst = 2; // seconds
-    const fade = 2;      // seconds
-    const holdLast = 2;  // seconds
-    const total = holdFirst + fade + holdLast;
+    const holdFirst = 2;
+    const fade = 2;
+    const holdLast = 2;
+    const total = holdFirst + fade + holdLast; // 6
 
     const cmd = `${ffmpegPath.path} -y \
       -loop 1 -t ${holdFirst} -i "${normalizedPaths[0]}" \
       -loop 1 -t ${fade}      -i "${normalizedPaths[0]}" \
       -loop 1 -t ${fade}      -i "${normalizedPaths[1]}" \
       -loop 1 -t ${holdLast}  -i "${normalizedPaths[1]}" \
-      -filter_complex "
-        [1:v][2:v]blend=all_expr='A*(1-T/${fade})+B*(T/${fade})'[vfade];
-        [0:v][vfade][3:v]concat=n=3:v=1:a=0,
-          setsar=1,setdar=1,         /* force square pixels */
-          fps=15,
-          scale=iw:ih:flags=lanczos, /* keep size, clean resample */
-          split[v1][v2];
-        [v1]palettegen=stats_mode=single[p];
-        [v2][p]paletteuse=new=1:dither=sierra2_4a[vout]
-      " \
+      -filter_complex "[1:v][2:v]blend=all_expr='A*(1-T/${fade})+B*(T/${fade})'[vfade];[0:v][vfade][3:v]concat=n=3:v=1:a=0,setsar=1,setdar=1,fps=15,scale=iw:ih:flags=lanczos,split[v1][v2];[v1]palettegen=stats_mode=single[p];[v2][p]paletteuse=dither=sierra2_4a[vout]" \
       -map "[vout]" -t ${total} "${gifPath}"`;
 
     console.log("▶️ Running FFmpeg…");

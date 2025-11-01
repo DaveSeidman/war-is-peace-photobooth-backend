@@ -20,7 +20,7 @@ export async function runRemovalPipeline(photoDir, combinedPath, timestamp, remo
   try {
     console.log("🎬 Starting single-pass background removal…");
 
-    // Downscale before upload for faster FAL
+    // === Downscale before upload for faster FAL ===
     const smallBuffer = await sharp(combinedPath)
       .resize({ width: 512, withoutEnlargement: true })
       .jpeg({ quality: 80 })
@@ -45,7 +45,7 @@ export async function runRemovalPipeline(photoDir, combinedPath, timestamp, remo
       return Buffer.from(await resp.arrayBuffer());
     };
 
-    // One fast FAL removal pass
+    // === Run one fast FAL removal pass ===
     console.log("🧩 Running single removal with FAL…");
     const result = await fal.subscribe("fal-ai/nano-banana/edit", {
       input: { prompt: removePrompt, image_urls: [currentUrl] },
@@ -61,7 +61,7 @@ export async function runRemovalPipeline(photoDir, combinedPath, timestamp, remo
     framePaths.push(framePath);
     console.log(`✅ Saved removal image: ${framePath}`);
 
-    // Normalize both images to same WxH
+    // === Normalize all images to same WxH ===
     console.log("🧮 Normalizing images…");
     const { width, height } = await sharp(framePaths[0]).metadata();
     for (const p of framePaths) {
@@ -70,35 +70,32 @@ export async function runRemovalPipeline(photoDir, combinedPath, timestamp, remo
       normalizedPaths.push(out);
     }
 
-    // Build GIF (2s hold → 2s fade → 2s hold) with square pixels + palette
-    // === Create GIF ===
-    console.log("🎞️ Creating animated GIF...");
+    // === Build GIF ===
+    console.log("🎞️ Creating animated GIF with long holds and smooth fade…");
+
     const gifPath = path.join(photoDir, `${timestamp}.gif`);
 
-    // Make each frame show for 1s, then crossfade over 0.5s
-    const stillDuration = 1;
-    const fadeDuration = 0.5;
+    // Hold times and fade (FFmpeg 4.4-safe)
+    const holdFirst = 2;
+    const fade = 2;
+    const holdLast = 3;
+    const total = holdFirst + fade + holdLast;
 
-    const inputs = normalizedPaths.map((p) => `-loop 1 -t ${stillDuration} -i "${p}"`).join(" ");
+    // Inputs
+    const cmd = `${ffmpegPath.path} -y \
+      -loop 1 -t ${holdFirst} -i "${normalizedPaths[0]}" \
+      -loop 1 -t ${fade} -i "${normalizedPaths[0]}" \
+      -loop 1 -t ${fade} -i "${normalizedPaths[1]}" \
+      -loop 1 -t ${holdLast} -i "${normalizedPaths[1]}" \
+      -filter_complex "
+        [1:v][2:v]blend=all_expr='A*(1-T/${fade})+B*(T/${fade})'[vfade];
+        [0:v][vfade][3:v]concat=n=3:v=1:a=0,format=yuv420p,fps=15[vout]
+      " \
+      -map "[vout]" -t ${total} "${gifPath}"`;
 
-    // Build a simple two-stage crossfade for up to 3 images
-    // ffmpeg’s xfade filter is cleaner than manually using blend
-    let filter;
-    if (normalizedPaths.length === 2) {
-      filter = `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${stillDuration - fadeDuration},format=yuv420p[vout]`;
-    } else if (normalizedPaths.length === 3) {
-      filter = `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${stillDuration - fadeDuration}[tmp];` +
-        `[tmp][2:v]xfade=transition=fade:duration=${fadeDuration}:offset=${2 * (stillDuration - fadeDuration)},format=yuv420p[vout]`;
-    } else {
-      throw new Error(`Unexpected frame count: ${normalizedPaths.length}`);
-    }
-
-    const cmd = `${ffmpegPath.path} -y ${inputs} -filter_complex "${filter}" -map "[vout]" -r 15 "${gifPath}"`;
-
-    console.log("▶️ Running FFmpeg:\n", cmd);
+    console.log("▶️ Running FFmpeg command…");
     await execAsync(cmd);
-    console.log("✅ GIF created:", gifPath);
-
+    console.log("✅ GIF created with extended holds:", gifPath);
   } catch (err) {
     console.error("❌ Removal pipeline failed:", err);
     if (err.stderr) console.error(err.stderr);
@@ -108,9 +105,3 @@ export async function runRemovalPipeline(photoDir, combinedPath, timestamp, remo
     }
   }
 }
-
-/**
- * Render.com notes:
- * - Using @ffmpeg-installer/ffmpeg is fine. Alternatively install system ffmpeg in build step.
- * - Verify filters:  ffmpeg -filters | grep -E "blend|palettegen|paletteuse"
- */

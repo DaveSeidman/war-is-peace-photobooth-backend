@@ -25,7 +25,7 @@ export async function sendToPrintServer(combinedPath, photoDir, timestamp) {
         { input: singleStrip, left: 0, top: 0 },
         { input: singleStrip, left: 600, top: 0 },
       ])
-      .gamma(0.8)
+      .gamma(1.5)
       .withMetadata({ density: 300 })
       .jpeg({ quality: 95, chromaSubsampling: "4:4:4" })
       .toFile(filepath);

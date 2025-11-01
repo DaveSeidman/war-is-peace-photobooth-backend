@@ -70,32 +70,35 @@ export async function runRemovalPipeline(photoDir, combinedPath, timestamp, remo
       normalizedPaths.push(out);
     }
 
-    // === Build GIF ===
-    console.log("🎞️ Creating animated GIF with long holds and smooth fade…");
+    // === Build GIF (square pixels + palette; FFmpeg 4.4+ safe) ===
+    console.log("🎞️ Creating animated GIF with 2 s hold → 2 s fade → 2 s hold…");
 
     const gifPath = path.join(photoDir, `${timestamp}.gif`);
-
-    // Hold times and fade (FFmpeg 4.4-safe)
-    const holdFirst = 2;
-    const fade = 2;
-    const holdLast = 3;
+    const holdFirst = 2; // seconds
+    const fade = 2;      // seconds
+    const holdLast = 2;  // seconds
     const total = holdFirst + fade + holdLast;
 
-    // Inputs
     const cmd = `${ffmpegPath.path} -y \
       -loop 1 -t ${holdFirst} -i "${normalizedPaths[0]}" \
-      -loop 1 -t ${fade} -i "${normalizedPaths[0]}" \
-      -loop 1 -t ${fade} -i "${normalizedPaths[1]}" \
-      -loop 1 -t ${holdLast} -i "${normalizedPaths[1]}" \
+      -loop 1 -t ${fade}      -i "${normalizedPaths[0]}" \
+      -loop 1 -t ${fade}      -i "${normalizedPaths[1]}" \
+      -loop 1 -t ${holdLast}  -i "${normalizedPaths[1]}" \
       -filter_complex "
         [1:v][2:v]blend=all_expr='A*(1-T/${fade})+B*(T/${fade})'[vfade];
-        [0:v][vfade][3:v]concat=n=3:v=1:a=0,format=yuv420p,fps=15[vout]
+        [0:v][vfade][3:v]concat=n=3:v=1:a=0,
+          setsar=1,setdar=1,         /* force square pixels */
+          fps=15,
+          scale=iw:ih:flags=lanczos, /* keep size, clean resample */
+          split[v1][v2];
+        [v1]palettegen=stats_mode=single[p];
+        [v2][p]paletteuse=new=1:dither=sierra2_4a[vout]
       " \
       -map "[vout]" -t ${total} "${gifPath}"`;
 
-    console.log("▶️ Running FFmpeg command…");
+    console.log("▶️ Running FFmpeg…");
     await execAsync(cmd);
-    console.log("✅ GIF created with extended holds:", gifPath);
+    console.log("✅ GIF created with correct aspect:", gifPath);
   } catch (err) {
     console.error("❌ Removal pipeline failed:", err);
     if (err.stderr) console.error(err.stderr);

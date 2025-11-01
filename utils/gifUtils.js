@@ -71,24 +71,34 @@ export async function runRemovalPipeline(photoDir, combinedPath, timestamp, remo
     }
 
     // Build GIF (2s hold → 2s fade → 2s hold) with square pixels + palette
-    console.log("🎞️ Creating animated GIF…");
+    // === Create GIF ===
+    console.log("🎞️ Creating animated GIF...");
     const gifPath = path.join(photoDir, `${timestamp}.gif`);
-    const holdFirst = 2;
-    const fade = 2;
-    const holdLast = 2;
-    const total = holdFirst + fade + holdLast; // 6
 
-    const cmd = `${ffmpegPath.path} -y \
-      -loop 1 -t ${holdFirst} -i "${normalizedPaths[0]}" \
-      -loop 1 -t ${fade}      -i "${normalizedPaths[0]}" \
-      -loop 1 -t ${fade}      -i "${normalizedPaths[1]}" \
-      -loop 1 -t ${holdLast}  -i "${normalizedPaths[1]}" \
-      -filter_complex "[1:v][2:v]blend=all_expr='A*(1-T/${fade})+B*(T/${fade})'[vfade];[0:v][vfade][3:v]concat=n=3:v=1:a=0,setsar=1,setdar=1,fps=15,scale=iw:ih:flags=lanczos,split[v1][v2];[v1]palettegen=stats_mode=single[p];[v2][p]paletteuse=dither=sierra2_4a[vout]" \
-      -map "[vout]" -t ${total} "${gifPath}"`;
+    // Make each frame show for 1s, then crossfade over 0.5s
+    const stillDuration = 1;
+    const fadeDuration = 0.5;
 
-    console.log("▶️ Running FFmpeg…");
+    const inputs = normalizedPaths.map((p) => `-loop 1 -t ${stillDuration} -i "${p}"`).join(" ");
+
+    // Build a simple two-stage crossfade for up to 3 images
+    // ffmpeg’s xfade filter is cleaner than manually using blend
+    let filter;
+    if (normalizedPaths.length === 2) {
+      filter = `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${stillDuration - fadeDuration},format=yuv420p[vout]`;
+    } else if (normalizedPaths.length === 3) {
+      filter = `[0:v][1:v]xfade=transition=fade:duration=${fadeDuration}:offset=${stillDuration - fadeDuration}[tmp];` +
+        `[tmp][2:v]xfade=transition=fade:duration=${fadeDuration}:offset=${2 * (stillDuration - fadeDuration)},format=yuv420p[vout]`;
+    } else {
+      throw new Error(`Unexpected frame count: ${normalizedPaths.length}`);
+    }
+
+    const cmd = `${ffmpegPath.path} -y ${inputs} -filter_complex "${filter}" -map "[vout]" -r 15 "${gifPath}"`;
+
+    console.log("▶️ Running FFmpeg:\n", cmd);
     await execAsync(cmd);
-    console.log("✅ GIF created with correct aspect:", gifPath);
+    console.log("✅ GIF created:", gifPath);
+
   } catch (err) {
     console.error("❌ Removal pipeline failed:", err);
     if (err.stderr) console.error(err.stderr);
@@ -98,3 +108,9 @@ export async function runRemovalPipeline(photoDir, combinedPath, timestamp, remo
     }
   }
 }
+
+/**
+ * Render.com notes:
+ * - Using @ffmpeg-installer/ffmpeg is fine. Alternatively install system ffmpeg in build step.
+ * - Verify filters:  ffmpeg -filters | grep -E "blend|palettegen|paletteuse"
+ */

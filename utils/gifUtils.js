@@ -81,7 +81,6 @@ export async function runRemovalPipeline(photoDir, combinedPath, timestamp, remo
     const holdLast = 3;
     const total = holdFirst + fade + holdLast;
 
-    // Inputs
     const cmd = `${ffmpegPath.path} -y \
       -loop 1 -t ${holdFirst} -i "${normalizedPaths[0]}" \
       -loop 1 -t ${fade} -i "${normalizedPaths[0]}" \
@@ -89,7 +88,9 @@ export async function runRemovalPipeline(photoDir, combinedPath, timestamp, remo
       -loop 1 -t ${holdLast} -i "${normalizedPaths[1]}" \
       -filter_complex "
         [1:v][2:v]blend=all_expr='A*(1-T/${fade})+B*(T/${fade})'[vfade];
-        [0:v][vfade][3:v]concat=n=3:v=1:a=0,format=yuv420p,fps=15[vout]
+        [0:v][vfade][3:v]concat=n=3:v=1:a=0,
+        setsar=1,setdar=1,
+        format=yuv420p,fps=15[vout]
       " \
       -map "[vout]" -t ${total} "${gifPath}"`;
 

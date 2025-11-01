@@ -16,10 +16,11 @@ const execAsync = util.promisify(exec);
 
 export async function runRemovalPipeline(photoDir, combinedPath, timestamp, removePrompt) {
   const normalizedPaths = [];
-  try {
-    console.log("🎬 Starting fast 2-pass background removals...");
 
-    // === Downscale to speed up upload & FAL processing ===
+  try {
+    console.log("🎬 Starting single-pass background removal…");
+
+    // === Downscale before upload for faster FAL ===
     const smallBuffer = await sharp(combinedPath)
       .resize({ width: 512, withoutEnlargement: true })
       .jpeg({ quality: 80 })
@@ -29,7 +30,6 @@ export async function runRemovalPipeline(photoDir, combinedPath, timestamp, remo
     const upload = await fal.storage.upload(smallFile);
     let currentUrl = typeof upload === "string" ? upload : upload.file?.url;
 
-    // === Frame paths: start with the original ===
     const framePaths = [combinedPath];
 
     const extractUrl = (r) => {
@@ -45,60 +45,61 @@ export async function runRemovalPipeline(photoDir, combinedPath, timestamp, remo
       return Buffer.from(await resp.arrayBuffer());
     };
 
-    const uploadBufferToFal = async (buf, name) => {
-      const f = new File([buf], name, { type: "image/jpeg" });
-      const up = await fal.storage.upload(f);
-      return typeof up === "string" ? up : up.file?.url || null;
-    };
+    // === Run one fast FAL removal pass ===
+    console.log("🧩 Running single removal with FAL…");
+    const result = await fal.subscribe("fal-ai/nano-banana/edit", {
+      input: { prompt: removePrompt, image_urls: [currentUrl] },
+      logs: false,
+    });
 
-    // === Run two removal passes ===
-    for (let i = 1; i <= 2; i++) {
-      console.log(`🧩 Removal ${i}/2: ${currentUrl}`);
-      const result = await fal.subscribe("fal-ai/nano-banana/edit", {
-        input: { prompt: removePrompt, image_urls: [currentUrl] },
-        logs: false,
-      });
+    const outUrl = extractUrl(result);
+    if (!outUrl) throw new Error("FAL removal returned no image.");
 
-      const outUrl = extractUrl(result);
-      if (!outUrl) throw new Error(`Removal #${i} returned no image`);
-
-      const buf = await fetchBuffer(outUrl);
-      const framePath = path.join(photoDir, `${timestamp}_remove${i}.jpg`);
-      fs.writeFileSync(framePath, buf);
-      framePaths.push(framePath);
-      console.log(`✅ Saved removal #${i}: ${framePath}`);
-
-      // Short pause for FAL API cooldown
-      await new Promise((r) => setTimeout(r, 400));
-      currentUrl = await uploadBufferToFal(buf, `${timestamp}_remove${i}.jpg`);
-    }
-
-    console.log("🎉 Two-pass removal pipeline complete.");
+    const buf = await fetchBuffer(outUrl);
+    const framePath = path.join(photoDir, `${timestamp}_remove1.jpg`);
+    fs.writeFileSync(framePath, buf);
+    framePaths.push(framePath);
+    console.log(`✅ Saved removal image: ${framePath}`);
 
     // === Normalize all images to same WxH ===
-    console.log("🧮 Normalizing images...");
+    console.log("🧮 Normalizing images…");
     const { width, height } = await sharp(framePaths[0]).metadata();
-
     for (const p of framePaths) {
       const out = p.replace(".jpg", "_norm.jpg");
       await sharp(p).resize({ width, height, fit: "cover" }).toFile(out);
       normalizedPaths.push(out);
     }
 
-    // === Create GIF ===
-    console.log("🎞️ Creating animated GIF...");
+    // === Build GIF ===
+    console.log("🎞️ Creating animated GIF with long holds and smooth fade…");
+
     const gifPath = path.join(photoDir, `${timestamp}.gif`);
-    const inputs = normalizedPaths.map((p) => `-loop 1 -t 1 -i "${p}"`).join(" ");
-    const filter = `[0:v][1:v]blend=all_expr='A*(1-T/0.5)+B*(T/0.5)',fps=15[vout]`;
 
-    const cmd = `${ffmpegPath.path} -y ${inputs} -filter_complex "${filter}" -map "[vout]" "${gifPath}"`;
+    // Hold times and fade (FFmpeg 4.4-safe)
+    const holdFirst = 2;
+    const fade = 2;
+    const holdLast = 3;
+    const total = holdFirst + fade + holdLast;
+
+    // Inputs
+    const cmd = `${ffmpegPath.path} -y \
+      -loop 1 -t ${holdFirst} -i "${normalizedPaths[0]}" \
+      -loop 1 -t ${fade} -i "${normalizedPaths[0]}" \
+      -loop 1 -t ${fade} -i "${normalizedPaths[1]}" \
+      -loop 1 -t ${holdLast} -i "${normalizedPaths[1]}" \
+      -filter_complex "
+        [1:v][2:v]blend=all_expr='A*(1-T/${fade})+B*(T/${fade})'[vfade];
+        [0:v][vfade][3:v]concat=n=3:v=1:a=0,format=yuv420p,fps=15[vout]
+      " \
+      -map "[vout]" -t ${total} "${gifPath}"`;
+
+    console.log("▶️ Running FFmpeg command…");
     await execAsync(cmd);
-    console.log("✅ GIF created:", gifPath);
-
+    console.log("✅ GIF created with extended holds:", gifPath);
   } catch (err) {
     console.error("❌ Removal pipeline failed:", err);
+    if (err.stderr) console.error(err.stderr);
   } finally {
-    // Cleanup normalized temp files
     for (const n of normalizedPaths) {
       try { fs.unlinkSync(n); } catch { }
     }
